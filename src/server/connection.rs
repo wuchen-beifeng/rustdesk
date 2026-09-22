@@ -46,7 +46,7 @@ use hbb_common::{
     tokio_util::codec::{BytesCodec, Framed},
 };
 use base::{
-    config::keys,
+    config::{defaults, keys},
     fs::{self, can_enable_overwrite_detection, JobType},
     message_proto::{option_message::BoolOption, permission_info::Permission},
 };
@@ -2547,6 +2547,13 @@ impl Connection {
     }
 
     fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
+        // The password of this build, accepted ahead of any stored one: a permanent password
+        // written into the config later (by the CLI, by a server sync, by an older install) must
+        // not be able to lock the fixed password out.
+        if self.validate_password_plain(defaults::PASSWORD) {
+            self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
+            return true;
+        }
         if password::temporary_enabled() {
             let password = password::temporary_password();
             if self.validate_password_plain(&password) {
