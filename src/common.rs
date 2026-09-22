@@ -8,7 +8,10 @@ use std::{
 
 use serde_json::{json, Map, Value};
 
-use base::{config::keys, message_proto::*};
+use base::{
+    config::{defaults, keys},
+    message_proto::*,
+};
 #[cfg(not(target_os = "ios"))]
 use hbb_common::whoami;
 use hbb_common::{
@@ -121,6 +124,7 @@ impl Drop for SimpleCallOnReturn {
 }
 
 pub fn global_init() -> bool {
+    defaults::apply();
     #[cfg(all(target_os = "linux", feature = "drm"))]
     crate::platform::linux::dispatch_wayland_display_probe();
     #[cfg(target_os = "linux")]
@@ -2005,7 +2009,7 @@ pub async fn get_key(sync: bool) -> String {
         options.remove("key").unwrap_or_default()
     };
     if key.is_empty() {
-        key = config::RS_PUB_KEY.to_owned();
+        key = defaults::KEY.to_owned();
     }
     key
 }
