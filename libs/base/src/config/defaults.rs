@@ -9,7 +9,10 @@
 
 use crate::config::keys;
 use hbb_common::{
-    config::{compute_permanent_password_h1, BUILTIN_SETTINGS, DEFAULT_SETTINGS, HARD_SETTINGS},
+    config::{
+        compute_permanent_password_h1, BUILTIN_SETTINGS, DEFAULT_SETTINGS, HARD_SETTINGS,
+        OVERWRITE_SETTINGS,
+    },
     sodiumoxide::base64,
 };
 
@@ -38,11 +41,12 @@ const PASSWORD_HASH_PREFIX: &str = "00";
 /// Install the servers, the password and the session defaults. Call once, before anything reads
 /// an option or authenticates a peer in this process.
 pub fn apply() {
-    apply_servers_and_session_defaults();
+    apply_servers();
+    apply_session();
     apply_password();
 }
 
-fn apply_servers_and_session_defaults() {
+fn apply_servers() {
     let mut defaults = DEFAULT_SETTINGS.write().unwrap();
     defaults.insert(
         keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(),
@@ -51,17 +55,23 @@ fn apply_servers_and_session_defaults() {
     defaults.insert(keys::OPTION_RELAY_SERVER.to_owned(), RELAY_SERVER.to_owned());
     defaults.insert(keys::OPTION_API_SERVER.to_owned(), API_SERVER.to_owned());
     defaults.insert(keys::OPTION_KEY.to_owned(), KEY.to_owned());
-    // Every permission, so a session starts with full access; the per-permission switches below it
-    // are then only there for someone who deliberately narrows one down.
-    defaults.insert(keys::OPTION_ACCESS_MODE.to_owned(), "full".to_owned());
-    // The fixed password is the only way in: no temporary (random) password is handed out or
-    // accepted, and nothing has to be clicked to let a session in.
-    defaults.insert(
+}
+
+/// A machine that ran RustDesk before this build keeps its stored options, and a stored option
+/// outranks a default, so these three are installed as overwrites: whatever an older install left
+/// behind, the session still takes the fixed password, still needs no click, and still gets every
+/// permission. They show up as fixed in Settings, which is the point.
+fn apply_session() {
+    let mut overwrite = OVERWRITE_SETTINGS.write().unwrap();
+    // Every permission, so a session starts with full access.
+    overwrite.insert(keys::OPTION_ACCESS_MODE.to_owned(), "full".to_owned());
+    // The fixed password is the only way in: no temporary (random) password is accepted.
+    overwrite.insert(
         keys::OPTION_VERIFICATION_METHOD.to_owned(),
         "use-permanent-password".to_owned(),
     );
-    defaults.insert(keys::OPTION_APPROVE_MODE.to_owned(), "password".to_owned());
-    drop(defaults);
+    overwrite.insert(keys::OPTION_APPROVE_MODE.to_owned(), "password".to_owned());
+    drop(overwrite);
 
     let mut builtin = BUILTIN_SETTINGS.write().unwrap();
     // Connections made *from* this build carry the password with them, so they get in without
