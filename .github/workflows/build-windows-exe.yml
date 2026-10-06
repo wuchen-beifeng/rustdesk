@@ -14,7 +14,8 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VERSION: "1.5.0"
+  # The artifact is named after the version in Cargo.toml (see the "Read the version"
+  # step); keeping a second copy of it here is how the name goes stale after a bump.
 
 jobs:
   # The flutter_rust_bridge glue is generated, not committed, so it has to exist before the
@@ -190,10 +191,48 @@ jobs:
           fi
         shell: bash
 
+      - name: Read the version from Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=${v:-1.5.0}" >> "$GITHUB_OUTPUT"
+          echo "building ${v:-1.5.0}"
+
       - name: Build rustdesk
         run: |
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           mv ./flutter/build/windows/x64/runner/Release ./rustdesk
+
+      # A sync that drops defaults.rs from the crate, or reorders global_init, would still
+      # build. Read the constants out of the source and require them in the DLL: this is the
+      # part that must never silently regress.
+      - name: Verify the customisations are baked into the binary
+        shell: bash
+        run: |
+          dll=./rustdesk/librustdesk.dll
+          if [ ! -f "$dll" ]; then
+            echo "::error::missing $dll"
+            ls -l ./rustdesk
+            exit 1
+          fi
+          id_server=$(sed -n 's/^pub const ID_SERVER: &str = "\(.*\)";/\1/p' libs/base/src/config/defaults.rs)
+          key=$(sed -n 's/^pub const KEY: &str = "\(.*\)";/\1/p' libs/base/src/config/defaults.rs)
+          rc=0
+          check() {
+            if grep -aqF -- "$2" "$dll"; then
+              echo "ok: $1"
+            else
+              echo "::error::$1 is not in librustdesk.dll"
+              rc=1
+            fi
+          }
+          check "the self-hosted ID server" "$id_server"
+          check "the server public key" "$key"
+          # Only this fork's defaults.rs holds this literal: it is what stops the random
+          # temporary password from being accepted.
+          check "verification-method=use-permanent-password" "use-permanent-password"
+          exit $rc
 
       - name: find Runner.res
         continue-on-error: true
@@ -225,7 +264,7 @@ jobs:
           mkdir -p ./out
           for p in ./target/release/rustdesk-portable-packer.exe ./libs/portable/target/release/rustdesk-portable-packer.exe; do
             if [ -f "$p" ]; then
-              cp "$p" "./out/rustdesk-${{ env.VERSION }}-x86_64.exe"
+              cp "$p" "./out/rustdesk-${{ steps.version.outputs.version }}-x86_64.exe"
             fi
           done
           ls -l ./out
