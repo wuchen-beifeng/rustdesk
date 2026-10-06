@@ -5,7 +5,9 @@
 //!
 //! The password is installed as the hard/preset one (its hash, not the plaintext), so a session is
 //! accepted with it on every device of this deployment without anyone typing anything, and the
-//! random temporary password is out of the picture.
+//! random temporary password is out of the picture. The plaintext itself is not in this file: it
+//! is compiled in from `RUSTDESK_PASSWORD`, which the build workflow takes from a repository
+//! secret.
 
 use crate::config::keys;
 use hbb_common::{
@@ -13,6 +15,7 @@ use hbb_common::{
         compute_permanent_password_h1, BUILTIN_SETTINGS, DEFAULT_SETTINGS, HARD_SETTINGS,
         OVERWRITE_SETTINGS,
     },
+    log,
     sodiumoxide::base64,
 };
 
@@ -29,7 +32,20 @@ pub const API_SERVER: &str = "http://rustdesk.aichen.fun:21114";
 pub const KEY: &str = "Y0tAtNMbwTsNRxEVnuOrZWsn6Mr8XjCrBJnnWKVi4WI=";
 
 /// The password of every session, for both directions.
-pub const PASSWORD: &str = "fdh92672QQ@";
+///
+/// Compiled in from `RUSTDESK_PASSWORD` rather than kept here: the build workflow passes the
+/// repository secret of that name, and a local build passes it on the command line
+/// (`RUSTDESK_PASSWORD=... python3 build.py --portable ...`), so the plaintext sits in neither the
+/// repository nor a config file.
+///
+/// An empty value is not a password. `apply()` then installs no preset, and because
+/// `verification-method` below is `use-permanent-password`, a build without it accepts no session
+/// at all (it fails closed) instead of falling back to a random temporary password. The workflow
+/// refuses to build in that state.
+pub const PASSWORD: &str = match option_env!("RUSTDESK_PASSWORD") {
+    Some(password) => password,
+    None => "",
+};
 
 /// Salt the preset password is hashed with. A peer receives it in the login hash, so a constant
 /// costs nothing: what never leaves this build is the hash of the two.
@@ -87,6 +103,13 @@ fn apply_session() {
 }
 
 fn apply_password() {
+    if PASSWORD.is_empty() {
+        log::warn!(
+            "no RUSTDESK_PASSWORD was compiled in: this build has no fixed password and, with \
+             verification-method=use-permanent-password, accepts no session"
+        );
+        return;
+    }
     let h1 = compute_permanent_password_h1(PASSWORD, PASSWORD_SALT);
     let storage = PASSWORD_HASH_PREFIX.to_owned() + &base64::encode(&h1, base64::Variant::Original);
     let mut hard = HARD_SETTINGS.write().unwrap();

@@ -1,0 +1,101 @@
+name: Upstream sync check
+
+# Reports how far this fork is behind rustdesk/rustdesk and what the next merge would run
+# into: the two things that decide whether a sync is a five minute job or an afternoon.
+# It only reads -- it never merges, commits or pushes. Dispatch it by hand whenever you
+# want the current answer; the schedule is there so the answer arrives on its own.
+on:
+  schedule:
+    # Daily, a little after 03:00 UTC. GitHub disables scheduled workflows in a
+    # repository that sees no activity for 60 days: dispatch it by hand to bring it back.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout this fork with its history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare with upstream and try the merge
+        shell: bash
+        run: |
+          set -e
+          git config user.email "actions@users.noreply.github.com"
+          git config user.name "upstream sync check"
+          # Idempotent: a re-run in a checkout that already knows upstream must work too.
+          git remote add upstream https://github.com/rustdesk/rustdesk.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/rustdesk/rustdesk.git
+          git fetch --no-tags --quiet upstream master
+
+          upstream_sha=$(git rev-parse --short upstream/master)
+          base=$(git merge-base HEAD upstream/master)
+          base_sha=$(git rev-parse --short "$base")
+          behind=$(git rev-list --count HEAD..upstream/master)
+          ahead=$(git rev-list --count upstream/master..HEAD)
+
+          # A trial merge is the only honest answer to "will this conflict". It runs in
+          # the checkout and is aborted again, nothing is committed or pushed.
+          merge_state=clean
+          if ! git merge --no-commit --no-ff upstream/master >/tmp/merge.log 2>&1; then
+            merge_state=conflicts
+          fi
+          conflicts=$(git diff --name-only --diff-filter=U | sort || true)
+          git merge --abort 2>/dev/null || true
+
+          # Files both sides touched since the merge base: the ones a merge can disagree
+          # about. This fork patches seven of them, see docs/CUSTOMIZATION.md.
+          ours=$(git diff --name-only "$base"..HEAD | sort)
+          theirs=$(git diff --name-only "$base"..upstream/master | sort)
+          both=$(comm -12 <(echo "$ours") <(echo "$theirs") || true)
+
+          {
+            echo "## Upstream sync status"
+            echo ""
+            echo "- upstream master: \`$upstream_sha\`"
+            echo "- merge base: \`$base_sha\`"
+            echo "- this fork is **$behind commits behind**, $ahead commits of its own"
+            echo "- trial merge of upstream master: **$merge_state**"
+            echo ""
+            if [ "$behind" = "0" ]; then
+              echo "Nothing to merge."
+            elif [ "$merge_state" = "conflicts" ]; then
+              echo "### Conflicts"
+              echo ""
+              echo '```'
+              echo "$conflicts"
+              echo '```'
+              echo ""
+              echo "Resolve them locally (\`git fetch upstream master && git merge upstream/master\`),"
+              echo "keep this fork's hunk in each file listed above, then push and run the"
+              echo "*Build Windows EXE* workflow."
+            else
+              echo "The merge applies cleanly. Push the merge commit and run the"
+              echo "*Build Windows EXE* workflow, which verifies that the customisations"
+              echo "are still compiled in."
+            fi
+            echo ""
+            echo "### Files changed on both sides since the merge base"
+            echo ""
+            echo '```'
+            echo "${both:-none}"
+            echo '```'
+            echo ""
+            echo "<details><summary>This fork's changes ($(echo "$ours" | grep -c . ) files)</summary>"
+            echo ""
+            echo '```'
+            echo "$ours"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "behind=$behind ahead=$ahead merge=$merge_state base=$base_sha upstream=$upstream_sha"
+          if [ "$behind" != "0" ]; then
+            echo "::warning::rustdesk/rustdesk master is $behind commits ahead (trial merge: $merge_state)"
+          fi
